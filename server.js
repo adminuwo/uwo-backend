@@ -16,6 +16,7 @@ dns.setServers(['8.8.8.8', '8.8.4.4']);
 dotenv.config();
 
 const app = express();
+app.set('trust proxy', true); // Trust GCP Load Balancer
 app.use(cors());
 app.use(express.json());
 
