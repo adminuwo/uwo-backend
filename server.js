@@ -61,6 +61,9 @@ const auth = (req, res, next) => {
 // --- ROUTES ---
 
 // 1. Submit Contact Form
+app.get('/api', (req, res) => {
+    res.send('Hello World!');
+});
 app.post('/api/contacts', async (req, res) => {
     try {
         const { name, email, message, purpose, source } = req.body;
