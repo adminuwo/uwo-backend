@@ -9,6 +9,8 @@ const Website = require('./models/Website');
 const Subscriber = require('./models/Subscriber');
 const nodemailer = require('nodemailer');
 const dns = require('dns');
+const { VertexAI } = require('@google-cloud/vertexai');
+const knowledgeBase = require('./knowledge_base');
 
 // Force DNS to use Google servers to fix Reliance Jio SRV lookup issue
 dns.setServers(['8.8.8.8', '8.8.4.4']);
@@ -20,6 +22,12 @@ app.set('trust proxy', true); // Trust GCP Load Balancer
 app.use(cors());
 app.use(express.json());
 
+// Log all requests for debugging
+app.use((req, res, next) => {
+    console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
+    next();
+});
+
 // MongoDB Connection
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/uwo_database';
 mongoose.connect(MONGO_URI)
@@ -29,7 +37,7 @@ mongoose.connect(MONGO_URI)
 // Load Admin Credentials from .json file
 const fs = require('fs');
 const path = require('path');
-const adminsPath = path.join(__dirname, '..', '.json');
+const adminsPath = path.join(__dirname, '..', 'uwo', '.json');
 let admins = [];
 
 try {
@@ -44,6 +52,42 @@ try {
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret_key';
 
+// --- Vertex AI Config ---
+const project = process.env.GOOGLE_PROJECT_ID || 'ai-mall-484810';
+const location = process.env.GOOGLE_LOCATION || 'us-central1';
+
+console.log(`✅ Vertex AI initializing with project: ${project}`);
+console.log(`📍 Location: ${location}`);
+
+const vertexAI = new VertexAI({ project: project, location: location });
+
+// Models
+const knowledgeText = knowledgeBase.map(item => `Q: ${item.question}\nA: ${item.answer}`).join('\n\n');
+
+const generativeModel = vertexAI.getGenerativeModel({
+    model: 'gemini-2.0-flash-001',
+    systemInstruction: `You are the UWO™ AI Assistant. Help users with their questions about Unified Web Options & Services (UWO™). 
+
+Use this specific knowledge to answer user questions:
+${knowledgeText}
+
+If a user asks a question that is not covered by the provided knowledge or if you are unsure about the answer, politely inform them that you don't have that specific information and provide them with the following contact details for further assistance:
+- Email: admin@uwo24.com
+- Mobile/WhatsApp: +91 8358990909
+
+Be professional, friendly, and concise in your responses. Always use the term UWO™ instead of just UWO.`
+});
+
+console.log(`✅ Vertex AI initialized successfully`);
+console.log(`🤖 Model: gemini-2.0-flash-001`);
+console.log(`🆔 Project: ${project}`);
+
+// Log Cloudinary Status
+console.log(`[INFO] [Cloudinary Config] Cloud Name: ${process.env.CLOUDINARY_CLOUD_NAME ? 'Set' : 'Not Set'}`);
+console.log(`[INFO] [Cloudinary Config] API Key: ${process.env.CLOUDINARY_API_KEY ? 'Set' : 'Not Set'}`);
+console.log(`[INFO] [Cloudinary Config] API Secret: ${process.env.CLOUDINARY_API_SECRET ? 'Set' : 'Not Set'}`);
+
+// Helper: Get Embeddings (Vertex AI textembedding-gecko@003)
 // Middleware for JWT Verification
 const auth = (req, res, next) => {
     const token = req.header('Authorization');
@@ -55,6 +99,49 @@ const auth = (req, res, next) => {
         next();
     } catch (err) {
         res.status(401).json({ message: 'Token is not valid' });
+    }
+};
+
+// Helper function to send notification to Admin
+const sendAdminNotification = async (data) => {
+    const transporter = nodemailer.createTransport({
+        host: process.env.SMTP_HOST || 'smtp.gmail.com',
+        port: parseInt(process.env.SMTP_PORT) || 587,
+        secure: false,
+        auth: {
+            user: process.env.EMAIL_USER,
+            pass: process.env.EMAIL_PASS
+        },
+        tls: {
+            rejectUnauthorized: false
+        }
+    });
+
+    const adminMailOptions = {
+        from: `"UWO System" <${process.env.EMAIL_USER}>`,
+        to: 'admin@uwo24.com',
+        subject: `New Lead: ${data.source || 'Contact Form'} Submission`,
+        html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #ddd; border-top: 5px solid #162377;">
+                <h2 style="color: #162377;">New ${data.source || 'Contact Form'} Submission</h2>
+                <p><strong>Name:</strong> ${data.name || 'Not provided'}</p>
+                <p><strong>Email:</strong> <a href="mailto:${data.email}">${data.email}</a></p>
+                <p><strong>Purpose:</strong> ${data.purpose || 'Not specified'}</p>
+                <hr>
+                <p><strong>Message:</strong></p>
+                <p style="background: #f4f4f4; padding: 15px; border-radius: 5px;">${data.message || 'No message content'}</p>
+                <hr>
+                <p style="font-size: 12px; color: #666;">This is an automated notification from your UWO website backend.</p>
+            </div>
+        `
+    };
+
+    try {
+        console.log(`📤 Attempting to notify admin for lead: ${data.email} (${data.source || 'Contact Form'})`);
+        const info = await transporter.sendMail(adminMailOptions);
+        console.log('✅ Admin notified successfully: ' + info.response);
+    } catch (err) {
+        console.error('❌ Failed to notify admin via email:', err);
     }
 };
 
@@ -75,6 +162,16 @@ app.post('/api/contacts', async (req, res) => {
             source: source || 'UWO'
         });
         await newContact.save();
+
+        // Notify Admin
+        await sendAdminNotification({
+            name,
+            email,
+            message,
+            purpose,
+            source: source || 'Web Contact Form'
+        });
+
         res.status(201).json({ message: 'Message sent successfully' });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -147,7 +244,7 @@ app.get('/api/website', async (req, res) => {
 // 6. Subscriber Route
 app.post('/api/subscribe', async (req, res) => {
     try {
-        const { email } = req.body;
+        const { email, source, message } = req.body;
 
         // 1. Save to DB (Only if new)
         const existing = await Subscriber.findOne({ email });
@@ -157,15 +254,24 @@ app.post('/api/subscribe', async (req, res) => {
 
             // Also save to Contact collection to show in Admin Panel
             const newContact = new Contact({
-                name: 'New Subscriber',
+                name: 'New Chat User',
                 email: email,
-                purpose: 'Newsletter Subscription',
-                message: 'User subscribed to EFV™ updates.',
-                source: 'EFV'
+                purpose: 'Chatbot Lead',
+                message: message || 'User provided email via Chatbot.',
+                source: source || 'UWO'
             });
             await newContact.save();
+
+            // Notify Admin of the new Chatbot Lead
+            await sendAdminNotification({
+                name: 'New Chat User',
+                email: email,
+                purpose: 'Chatbot Lead',
+                message: message || 'User provided email via Chatbot.',
+                source: source || 'UWO Chatbot'
+            });
         } else {
-            console.log(`♻️ User ${email} already exists, resending email...`);
+            console.log(`♻️ User ${email} already exists, resending welcome email...`);
         }
 
         // 2. Send Welcome Email (Always)
@@ -462,5 +568,30 @@ app.delete('/api/subscribers/:id', auth, async (req, res) => {
     }
 });
 
+// 9. Chat (Public)
+app.post('/api/chat', async (req, res) => {
+    try {
+        const { message } = req.body;
+        if (!message) return res.status(400).json({ message: 'Message is required' });
+
+        console.log(`💬 User Message: "${message}"`);
+
+        const result = await generativeModel.generateContent(message);
+        const responseText = result.response.candidates[0].content.parts[0].text;
+
+        res.json({ reply: responseText });
+    } catch (err) {
+        console.error("❌ Chat Error Details:", err);
+        res.status(500).json({ error: err.message || "I'm having trouble connecting to AI right now." });
+    }
+});
+
 const PORT = process.env.PORT || 5000;
+
+// Global Error Handler
+app.use((err, req, res, next) => {
+    console.error("🔥 Global Error caught:", err);
+    res.status(500).json({ error: "An internal server error occurred.", details: err.message });
+});
+
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT} `));
