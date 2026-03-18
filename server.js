@@ -7,7 +7,14 @@ const bcrypt = require('bcryptjs');
 const Contact = require('./models/Contact');
 const Website = require('./models/Website');
 const Subscriber = require('./models/Subscriber');
+const ChatLog = require('./models/ChatLog');
+const Document = require('./models/Document');
 const nodemailer = require('nodemailer');
+const fs = require('fs');
+const path = require('path');
+const multer = require('multer');
+const pdf = require('pdf-parse');
+const mammoth = require('mammoth');
 const dns = require('dns');
 const { VertexAI } = require('@google-cloud/vertexai');
 const knowledgeBase = require('./knowledge_base');
@@ -35,8 +42,6 @@ mongoose.connect(MONGO_URI)
     .catch(err => console.error('❌ MongoDB Connection Error:', err));
 
 // Load Admin Credentials from .json file
-const fs = require('fs');
-const path = require('path');
 const adminsPath = path.join(__dirname, '..', 'uwo', '.json');
 let admins = [];
 
@@ -63,19 +68,18 @@ const vertexAI = new VertexAI({ project: project, location: location });
 
 // Models
 const knowledgeText = knowledgeBase.map(item => `Q: ${item.question}\nA: ${item.answer}`).join('\n\n');
-
 const generativeModel = vertexAI.getGenerativeModel({
     model: 'gemini-2.0-flash-001',
-    systemInstruction: `You are the UWO™ AI Assistant. Help users with their questions about Unified Web Options & Services (UWO™). 
+    systemInstruction: `You are the UWO AI Assistant. You are a versatile expert AI with both local UWO knowledge and vast general knowledge of the world.
 
-Use this specific knowledge to answer user questions:
-${knowledgeText}
+Tone: Professional, helpful, smart, and direct.
 
-If a user asks a question that is not covered by the provided knowledge or if you are unsure about the answer, politely inform them that you don't have that specific information and provide them with the following contact details for further assistance:
-- Email: admin@uwo24.com
-- Mobile/WhatsApp: +91 8358990909
-
-Be professional, friendly, and concise in your responses. Always use the term UWO™ instead of just UWO.`
+Guidelines:
+1. LANGUAGE: Respond in the user's language (Marathi for Marathi, Hindi for Hindi, etc.).
+2. HYBRID INTELLIGENCE: Use the provided document context to answer UWO-related questions.
+3. NO APOLOGIES: Never say "the provided documents do not contain..." or "I don't have information in the context".
+4. BE A CHATGPT-LIKE ASSISTANT: If a question is not about UWO (e.g., "what is Instagram?", "write a poem", "how to code in JS"), provide a complete and high-quality answer using your general training.
+5. UWO BRANDING: Always represent UWO (Unified Web Options) as a premium global brand.`
 });
 
 console.log(`✅ Vertex AI initialized successfully`);
@@ -144,6 +148,70 @@ const sendAdminNotification = async (data) => {
         console.error('❌ Failed to notify admin via email:', err);
     }
 };
+
+// --- RAG (Document Handling) ---
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        if (!fs.existsSync('./uploads')) fs.mkdirSync('./uploads');
+        cb(null, './uploads');
+    },
+    filename: (req, file, cb) => cb(null, Date.now() + '-' + file.originalname)
+});
+const upload = multer({ storage: storage });
+
+app.post('/api/admin/upload-doc', upload.single('document'), async (req, res) => {
+    try {
+        if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+
+        const filePath = req.file.path;
+        let extractedText = "";
+
+        if (req.file.mimetype === 'application/pdf') {
+            const dataBuffer = fs.readFileSync(filePath);
+            const parser = new pdf.PDFParse({ data: dataBuffer, verbosity: 0 });
+            const pdfData = await parser.getText();
+            extractedText = pdfData.text;
+        } else if (req.file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+            const docResult = await mammoth.extractRawText({ path: filePath });
+            extractedText = docResult.value;
+        } else if (req.file.mimetype === 'text/plain' || req.file.mimetype === 'text/markdown') {
+            extractedText = fs.readFileSync(filePath, 'utf8');
+        } else {
+            return res.status(400).json({ message: "Unsupported file type: " + req.file.mimetype });
+        }
+
+        const newDoc = new Document({
+            fileName: req.file.originalname,
+            extractedText: extractedText,
+            fileType: req.file.mimetype
+        });
+
+        await newDoc.save();
+        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+        res.json({ message: "Document uploaded and indexed successfully!" });
+    } catch (err) {
+        console.error("❌ RAG Upload Error:", err);
+        res.status(500).json({ message: "Error processing document: " + err.message });
+    }
+});
+
+app.get('/api/admin/list-docs', async (req, res) => {
+    try {
+        const docs = await Document.find().sort({ uploadedAt: -1 });
+        res.json(docs);
+    } catch (err) {
+        res.status(500).json({ message: "Error fetching documents" });
+    }
+});
+
+app.delete('/api/admin/delete-doc/:id', async (req, res) => {
+    try {
+        await Document.findByIdAndDelete(req.params.id);
+        res.json({ message: "Document deleted" });
+    } catch (err) {
+        res.status(500).json({ message: "Error deleting document" });
+    }
+});
 
 // --- ROUTES ---
 
@@ -568,16 +636,103 @@ app.delete('/api/subscribers/:id', auth, async (req, res) => {
     }
 });
 
+// 8.1 Register Email (Chatbot Specific)
+app.post('/api/register-email', async (req, res) => {
+    try {
+        const { email } = req.body;
+        if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+            return res.status(400).json({ message: 'Valid email is required' });
+        }
+
+        // 1. Save to Subscriber collection (Only if new)
+        let subscriber = await Subscriber.findOne({ email });
+        if (!subscriber) {
+            subscriber = new Subscriber({ email });
+            await subscriber.save();
+
+            // Save the lead details into Contacts for Admin panel visibility
+            const newLead = new Contact({
+                name: 'New Chat User',
+                email: email,
+                purpose: 'Chatbot Lead',
+                message: 'User registered via UWO AI Chatbot.',
+                source: 'UWO AI'
+            });
+            await newLead.save();
+
+            // Notify Admin via email (as requested)
+            const transporter = nodemailer.createTransport({
+                host: process.env.SMTP_HOST || 'smtp.gmail.com',
+                port: parseInt(process.env.SMTP_PORT) || 587,
+                secure: false,
+                auth: {
+                    user: process.env.EMAIL_USER,
+                    pass: process.env.EMAIL_PASS
+                },
+                tls: { rejectUnauthorized: false }
+            });
+
+            const timestamp = new Date().toLocaleString();
+            const adminMailOptions = {
+                from: `"UWO AI Bot" <${process.env.EMAIL_USER}>`,
+                to: 'admin@uwo24.com',
+                subject: 'New User Interaction - UWO AI Bot',
+                html: `
+                    <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 600px; margin: auto; padding: 30px; border: 1px solid #e2e8f0; border-radius: 12px;">
+                        <h2 style="color: #162377;">New User Interaction - UWO AI Bot</h2>
+                        <p style="font-size: 16px; color: #475569;">A new user has started a conversation on the UWO platform.</p>
+                        <div style="background: #f8fafc; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                            <p><strong>Email:</strong> <span style="color: #162377;">${email}</span></p>
+                            <p><strong>Time:</strong> ${timestamp}</p>
+                        </div>
+                        <p style="font-size: 14px; color: #94a3b8;">This lead has been archived in the system database.</p>
+                    </div>
+                `
+            };
+
+            await transporter.sendMail(adminMailOptions);
+            console.log(`✅ Admin notified of new chatbot user: ${email}`);
+        }
+
+        res.status(200).json({ message: 'Registered successfully', registered: true });
+    } catch (err) {
+        console.error("❌ Register Email Error:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // 9. Chat (Public)
 app.post('/api/chat', async (req, res) => {
     try {
-        const { message } = req.body;
+        const { message, email } = req.body;
         if (!message) return res.status(400).json({ message: 'Message is required' });
 
-        console.log(`💬 User Message: "${message}"`);
+        console.log(`💬 User Message (${email || 'Anonymous'}): "${message}"`);
 
-        const result = await generativeModel.generateContent(message);
+        // Fetch RAG context
+        const allDocs = await Document.find();
+        const contextText = allDocs.map(d => `--- FILE: ${d.fileName} ---\n${d.extractedText}`).join("\n\n");
+
+        const prompt = contextText.length > 0
+            ? `Knowledge Context:\n${contextText}\n\nUser Question: ${message}\n\nInstruction: Provide an expert response. If the information is in the context, use it. If not, answer using your vast technical and general knowledge naturally. Speak naturally in the user's language.`
+            : message;
+
+        const result = await generativeModel.generateContent(prompt);
         const responseText = result.response.candidates[0].content.parts[0].text;
+
+        // Log to database if user is registered
+        if (email) {
+            try {
+                const newLog = new ChatLog({
+                    email,
+                    message,
+                    reply: responseText
+                });
+                await newLog.save();
+            } catch (logErr) {
+                console.error("⚠️ Failed to log chat:", logErr);
+            }
+        }
 
         res.json({ reply: responseText });
     } catch (err) {
