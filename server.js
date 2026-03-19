@@ -52,9 +52,12 @@ try {
     admins = JSON.parse(data);
     console.log('✅ Admin credentials loaded from .json');
 } catch (err) {
-    console.error('❌ Error loading .json:', err);
-    // Fallback if file missing
-    admins = [{ email: "admin@uwo24.com", password: "uwo@1234" }];
+    console.warn('⚠️ Could not load admin .json, using fallback credentials');
+    // Updated fallback to match user's expected email: admin@uwo.com
+    admins = [{ 
+        email: process.env.ADMIN_EMAIL || "admin@uwo.com", 
+        password: process.env.ADMIN_PASSWORD || "uwo@1234" 
+    }];
 }
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret_key';
