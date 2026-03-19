@@ -17,6 +17,8 @@ const pdf = require('pdf-parse');
 const mammoth = require('mammoth');
 const dns = require('dns');
 const { VertexAI } = require('@google-cloud/vertexai');
+const { Storage } = require('@google-cloud/storage');
+const { franc } = require('franc-min');
 const knowledgeBase = require('./knowledge_base');
 
 // Force DNS to use Google servers to fix Reliance Jio SRV lookup issue
@@ -60,26 +62,74 @@ const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret_key';
 // --- Vertex AI Config ---
 const project = process.env.GOOGLE_PROJECT_ID || 'ai-mall-484810';
 const location = process.env.GOOGLE_LOCATION || 'us-central1';
+const bucketName = process.env.GCS_BUCKET_NAME || 'uwo-rag-docs';
 
-console.log(`✅ Vertex AI initializing with project: ${project}`);
+console.log(`✅ Google Cloud initializing with project: ${project}`);
 console.log(`📍 Location: ${location}`);
 
 const vertexAI = new VertexAI({ project: project, location: location });
+
+// --- Google Cloud Storage Init ---
+const storageClient = new Storage({ projectId: project });
+const bucket = storageClient.bucket(bucketName);
+
+console.log(`🪣 Using GCS Bucket: ${bucketName}`);
+
 
 // Models
 const knowledgeText = knowledgeBase.map(item => `Q: ${item.question}\nA: ${item.answer}`).join('\n\n');
 const generativeModel = vertexAI.getGenerativeModel({
     model: 'gemini-2.0-flash-001',
-    systemInstruction: `You are the UWO AI Assistant. You are a versatile expert AI with both local UWO knowledge and vast general knowledge of the world.
+    systemInstruction: `You are UWO AI Assistant, a professional AI assistant for the UWO (Unified Web Options) digital platform.
 
-Tone: Professional, helpful, smart, and direct.
+-------------------------------------
 
-Guidelines:
-1. LANGUAGE: Respond in the user's language (Marathi for Marathi, Hindi for Hindi, etc.).
-2. HYBRID INTELLIGENCE: Use the provided document context to answer UWO-related questions.
-3. NO APOLOGIES: Never say "the provided documents do not contain..." or "I don't have information in the context".
-4. BE A CHATGPT-LIKE ASSISTANT: If a question is not about UWO (e.g., "what is Instagram?", "write a poem", "how to code in JS"), provide a complete and high-quality answer using your general training.
-5. UWO BRANDING: Always represent UWO (Unified Web Options) as a premium global brand.`
+🌍 LANGUAGE INTELLIGENCE (VERY IMPORTANT):
+1. Always detect the language of the user's input automatically.
+2. Respond ONLY in the same language as the user’s message.
+   - If user writes in English → reply in English
+   - If user writes in Hindi → reply in Hindi
+   - If user writes in Hinglish → reply in Hinglish
+   - If user writes in Marathi → reply in Marathi
+3. NEVER switch language on your own.
+4. NEVER translate unless user explicitly asks.
+
+-------------------------------------
+
+🔁 LANGUAGE SWITCH (USER CONTROL):
+If user says "Explain in Hindi", "Marathi me batao", or "Tell me in Sanskrit", then switch to that language immediately and continue until changed again.
+
+-------------------------------------
+
+🌐 MULTI-LANGUAGE SUPPORT:
+You support all major languages (English, Hindi, Hinglish, Marathi, Gujarati, Tamil, Telugu, Bengali, Sanskrit, and many international languages).
+If asked about support, answer: "I can communicate in multiple languages including English, Hindi, Hinglish, Marathi, Gujarati, Tamil, Telugu, Bengali, Sanskrit, and many international languages like Spanish, French, and more. You can ask me in any language."
+
+-------------------------------------
+
+🧠 BEHAVIOR RULES:
+- Be professional, clear, and helpful.
+- Do not mix languages unnecessarily.
+- Keep tone natural and human-like.
+- Match user's tone (formal/informal).
+- NO APOLOGIES: Never say "the provided documents do not contain..." or "I don't have information in the context". Always answer naturally.
+
+-------------------------------------
+
+📌 CONTEXT USAGE (FOR RAG):
+If local context from documents is provided, use it to answer. Always follow the same language rule even when using provided context.
+
+-------------------------------------
+
+🚫 STRICT RULES:
+- Do NOT default to Hindi or English.
+- ONLY follow user's language.
+- If unsure → respond in the most dominant language used in the query.
+
+-------------------------------------
+
+🎯 GOAL:
+Deliver a natural, human-like, multilingual conversation experience where the user feels the AI understands and speaks their language perfectly.`
 });
 
 console.log(`✅ Vertex AI initialized successfully`);
@@ -90,6 +140,28 @@ console.log(`🆔 Project: ${project}`);
 console.log(`[INFO] [Cloudinary Config] Cloud Name: ${process.env.CLOUDINARY_CLOUD_NAME ? 'Set' : 'Not Set'}`);
 console.log(`[INFO] [Cloudinary Config] API Key: ${process.env.CLOUDINARY_API_KEY ? 'Set' : 'Not Set'}`);
 console.log(`[INFO] [Cloudinary Config] API Secret: ${process.env.CLOUDINARY_API_SECRET ? 'Set' : 'Not Set'}`);
+
+// --- Language Detection Helper ---
+const detectLanguage = (text) => {
+    const lower = text.toLowerCase().trim();
+    
+    // 1. Manual Language Overrides (Highest Priority)
+    if (lower.includes("marathi") || /[\u0900-\u097F]/.test(text) && (lower.includes("येथे") || lower.includes("कसे"))) return "Marathi";
+    if (lower.includes("hindi")) return "Hindi";
+    if (lower.includes("hinglish")) return "Hinglish";
+    if (lower.includes("sanskrit")) return "Sanskrit";
+
+    // 2. Clear script check for Devanagari (Default to Hindi)
+    if (/[\u0900-\u097F]/.test(text)) return "Hindi";
+
+    // 3. Hinglish Keywords Check
+    const hinglishKeywords = ["hai", "kya", "nhi", "btao", "kaise", "sab", "toh", "ka", "ki", "ko", "kar", "ho", "tu", "teri", "mera"];
+    const words = lower.split(/\W+/);
+    if (hinglishKeywords.some(kw => words.includes(kw))) return "Hinglish";
+
+    // Default to English - NEVER random languages
+    return "English";
+};
 
 // Helper: Get Embeddings (Vertex AI textembedding-gecko@003)
 // Middleware for JWT Verification
@@ -164,8 +236,10 @@ app.post('/api/admin/upload-doc', upload.single('document'), async (req, res) =>
         if (!req.file) return res.status(400).json({ message: "No file uploaded" });
 
         const filePath = req.file.path;
+        const fileName = `${Date.now()}-${req.file.originalname}`;
         let extractedText = "";
 
+        // 1. Extract Text for RAG context
         if (req.file.mimetype === 'application/pdf') {
             const dataBuffer = fs.readFileSync(filePath);
             const parser = new pdf.PDFParse({ data: dataBuffer, verbosity: 0 });
@@ -177,20 +251,41 @@ app.post('/api/admin/upload-doc', upload.single('document'), async (req, res) =>
         } else if (req.file.mimetype === 'text/plain' || req.file.mimetype === 'text/markdown') {
             extractedText = fs.readFileSync(filePath, 'utf8');
         } else {
+            if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
             return res.status(400).json({ message: "Unsupported file type: " + req.file.mimetype });
         }
 
+        // 2. Upload to GCS Bucket for permanent storage
+        console.log(`☁️ Uploading ${req.file.originalname} to GCS...`);
+        const gcsFile = bucket.file(fileName);
+        
+        await bucket.upload(filePath, {
+            destination: fileName,
+            metadata: { contentType: req.file.mimetype }
+        });
+
+        // Make file public if needed, or just store the internal path
+        // For simplicity we store the public URL or just the path
+        const fileUrl = `https://storage.googleapis.com/${bucketName}/${fileName}`;
+
+        // 3. Save to MongoDB
         const newDoc = new Document({
             fileName: req.file.originalname,
             extractedText: extractedText,
-            fileType: req.file.mimetype
+            fileType: req.file.mimetype,
+            fileUrl: fileUrl
         });
 
         await newDoc.save();
+
+        // 4. Cleanup local file
         if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-        res.json({ message: "Document uploaded and indexed successfully!" });
+
+        res.json({ message: "Document uploaded to Cloud and indexed successfully!", url: fileUrl });
     } catch (err) {
         console.error("❌ RAG Upload Error:", err);
+        // Clean up even if upload fails
+        if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
         res.status(500).json({ message: "Error processing document: " + err.message });
     }
 });
@@ -206,9 +301,25 @@ app.get('/api/admin/list-docs', async (req, res) => {
 
 app.delete('/api/admin/delete-doc/:id', async (req, res) => {
     try {
+        const doc = await Document.findById(req.params.id);
+        if (!doc) return res.status(404).json({ message: "Document not found" });
+
+        // Delete from GCS if URL exists
+        if (doc.fileUrl) {
+            try {
+                const urlParts = doc.fileUrl.split('/');
+                const fileName = urlParts[urlParts.length - 1];
+                console.log(`🗑️ Deleting ${fileName} from GCS...`);
+                await bucket.file(fileName).delete();
+            } catch (gcsErr) {
+                console.error("⚠️ Failed to delete from GCS (might not exist):", gcsErr.message);
+            }
+        }
+
         await Document.findByIdAndDelete(req.params.id);
-        res.json({ message: "Document deleted" });
+        res.json({ message: "Document deleted from Cloud and DB" });
     } catch (err) {
+        console.error("❌ Delete Error:", err);
         res.status(500).json({ message: "Error deleting document" });
     }
 });
@@ -290,12 +401,32 @@ app.delete('/api/contacts/:id', auth, async (req, res) => {
 });
 
 // 5. Website Routes (Created as per request)
-app.post('/api/website', async (req, res) => {
+app.post('/api/aisa-demo', async (req, res) => {
     try {
-        const newItem = new Website(req.body);
-        await newItem.save();
-        res.status(201).json({ message: 'Item added to Website collection', data: newItem });
+        const { name, email, phone, company, message } = req.body;
+        
+        // Save to Database
+        const newLead = new Contact({
+            name,
+            email,
+            purpose: 'AISA Demo Request',
+            message: `Company: ${company || 'N/A'}\nPhone: ${phone || 'N/A'}\n\nMessage: ${message}`,
+            source: 'AISA Landing Page'
+        });
+        await newLead.save();
+
+        // Send Email Notification
+        await sendAdminNotification({
+            name,
+            email,
+            purpose: 'AISA Demo Request',
+            message: `Company: ${company || 'N/A'}\nPhone: ${phone || 'N/A'}\n\nMessage: ${message}`,
+            source: 'AISA Landing Page'
+        });
+
+        res.status(201).json({ message: 'Demo request sent successfully' });
     } catch (err) {
+        console.error('❌ AISA Demo Error:', err);
         res.status(500).json({ error: err.message });
     }
 });
@@ -707,27 +838,74 @@ app.post('/api/chat', async (req, res) => {
         const { message, email } = req.body;
         if (!message) return res.status(400).json({ message: 'Message is required' });
 
-        console.log(`💬 User Message (${email || 'Anonymous'}): "${message}"`);
+        // Step 1: Detect Language
+        const detectedLang = detectLanguage(message);
+        console.log(`💬 User Message (${email || 'Anonymous'}): "${message}" | Detected: ${detectedLang}`);
 
-        // Fetch RAG context
+        // Step 2: Fetch RAG context (from DB + knowledge_base.js)
         const allDocs = await Document.find();
-        const contextText = allDocs.map(d => `--- FILE: ${d.fileName} ---\n${d.extractedText}`).join("\n\n");
+        const docsContext = allDocs.map(d => `--- FILE: ${d.fileName} ---\n${d.extractedText}`).join("\n\n");
+        const contextText = `### CORE KNOWLEDGE:\n${knowledgeText}\n\n### UPLOADED DOCUMENTS:\n${docsContext}`;
 
-        const prompt = contextText.length > 0
-            ? `Knowledge Context:\n${contextText}\n\nUser Question: ${message}\n\nInstruction: Provide an expert response. If the information is in the context, use it. If not, answer using your vast technical and general knowledge naturally. Speak naturally in the user's language.`
-            : message;
+        // Step 3: Generate Dynamic System Prompt
+        const dynamicSystemInstruction = `You are UWO AI Assistant, a premium, minimalist expert guide.
 
-        const result = await generativeModel.generateContent(prompt);
-        const responseText = result.response.candidates[0].content.parts[0].text;
+### STRICT RESPONSE FORMAT (NON-NEGOTIABLE):
+1. **NO INTROS/OUTROS**: Do not say "Okay", "Here is", or "Based on info". Start directly with SUMMARY.
+2. **NO SYMBOLS**: Never use **, ##, *, or markdown.
+3. **HEADINGS & TERMS**: All headings (SUMMARY, KEY POINTS, etc.) and key terms MUST be in ALL CAPS followed by a colon: (e.g. SUMMARY:, IMPORTANT TERM:).
+4. **BULLETS ONLY**: Every single point must start with "• ".
+5. **ONE LINE PER POINT**: Do NOT write paragraphs. Max 1 line per bullet.
+6. **STRICT LENGTH**: Maximum 150-200 words total. Be extremely concise.
+7. **LANGUAGE**: Respond only in ${detectedLang}. (Devanagari for Hindi/Marathi, Roman for English).
+
+### STRUCTURE:
+SUMMARY:
+• [Point 1 about topic]
+• [Point 2 about topic]
+
+KEY POINTS:
+• [TERM IN CAPITALS]: [1 sentence explanation]
+• [TERM IN CAPITALS]: [1 sentence explanation]
+• [TERM IN CAPITALS]: [1 sentence explanation]
+
+BENEFITS:
+• [Benefit 1]
+• [Benefit 2]
+
+CONCLUSION:
+• [One sentence final impact]
+
+### KNOWLEDGE CONTEXT:
+${contextText}
+
+### RAG RULES:
+- Answer from context. If missing, use general knowledge.
+- NO APOLOGIES: Never say "not found". Just answer brilliantly.`;
+
+        const tempModel = vertexAI.getGenerativeModel({
+            model: 'gemini-2.0-flash-001',
+            systemInstruction: dynamicSystemInstruction
+        });
+
+        console.log(`🤖 LLM Called | Detected: ${detectedLang}`);
+        const result = await tempModel.generateContent(message);
+        let responseText = result.response.candidates[0].content.parts[0].text;
+        console.log(`✨ AI Response received [Length: ${responseText.length}]`);
+
+        // Step 5: Hard Language Enforcement (Fallback)
+        // Basic check: if we asked for Hindi/Marathi (Devanagari) but got ASCII, it's wrong.
+        const isActuallyDevanagari = /[\u0900-\u097F]/.test(responseText);
+        if ((detectedLang === "Hindi" || detectedLang === "Marathi") && !isActuallyDevanagari && !message.toLowerCase().includes("english")) {
+            console.log("⚠️ Incorrect language detected in AI response. Enforcing rewrite...");
+            const rewriteResult = await tempModel.generateContent(`Your previous response was not in ${detectedLang}. Rewrite the following response strictly in ${detectedLang} script only: \n\n${responseText}`);
+            responseText = rewriteResult.response.candidates[0].content.parts[0].text;
+        }
 
         // Log to database if user is registered
         if (email) {
             try {
-                const newLog = new ChatLog({
-                    email,
-                    message,
-                    reply: responseText
-                });
+                const newLog = new ChatLog({ email, message, reply: responseText });
                 await newLog.save();
             } catch (logErr) {
                 console.error("⚠️ Failed to log chat:", logErr);
