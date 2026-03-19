@@ -60,8 +60,8 @@ try {
 const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret_key';
 
 // --- Vertex AI Config ---
-const project = process.env.GOOGLE_PROJECT_ID || 'ai-mall-484810';
-const location = process.env.GOOGLE_LOCATION || 'us-central1';
+const project = process.env.GOOGLE_PROJECT_ID || 'unified-web-options';
+const location = process.env.GOOGLE_LOCATION || 'asia-south1';
 const bucketName = process.env.GCS_BUCKET_NAME || 'uwo-rag-docs';
 
 console.log(`✅ Google Cloud initializing with project: ${project}`);
@@ -79,7 +79,7 @@ console.log(`🪣 Using GCS Bucket: ${bucketName}`);
 // Models
 const knowledgeText = knowledgeBase.map(item => `Q: ${item.question}\nA: ${item.answer}`).join('\n\n');
 const generativeModel = vertexAI.getGenerativeModel({
-    model: 'gemini-2.0-flash-001',
+    model: 'gemini-2.0-flash',
     systemInstruction: `You are UWO AI Assistant, a professional AI assistant for the UWO (Unified Web Options) digital platform.
 
 -------------------------------------
@@ -133,7 +133,7 @@ Deliver a natural, human-like, multilingual conversation experience where the us
 });
 
 console.log(`✅ Vertex AI initialized successfully`);
-console.log(`🤖 Model: gemini-2.0-flash-001`);
+console.log(`🤖 Model: gemini-2.5-flash`);
 console.log(`🆔 Project: ${project}`);
 
 // Log Cloudinary Status
@@ -884,12 +884,18 @@ ${contextText}
 - NO APOLOGIES: Never say "not found". Just answer brilliantly.`;
 
         const tempModel = vertexAI.getGenerativeModel({
-            model: 'gemini-2.0-flash-001',
+            model: 'gemini-2.5-flash',
             systemInstruction: dynamicSystemInstruction
         });
 
-        console.log(`🤖 LLM Called | Detected: ${detectedLang}`);
-        const result = await tempModel.generateContent(message);
+        console.log(`🤖 LLM Called | Model: gemini-2.5-flash | Detected: ${detectedLang}`);
+        let result;
+        try {
+            result = await tempModel.generateContent(message);
+        } catch (aiErr) {
+            console.error("❌ Vertex AI generateContent Error:", JSON.stringify(aiErr?.message || aiErr));
+            return res.status(500).json({ error: 'AI generation failed', details: aiErr?.message });
+        }
         let responseText = result.response.candidates[0].content.parts[0].text;
         console.log(`✨ AI Response received [Length: ${responseText.length}]`);
 
