@@ -42,11 +42,18 @@ app.get('/', (req, res) => {
     res.send('<h2>UWO Backend is Active and Running</h2><p>Server connected securely to MongoDB & Vertex AI.</p>');
 });
 
-// MongoDB Connection
+// MongoDB Connection with enhanced error handling for Cloud Run
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/uwo_database';
+console.log('🚀 Attempting to connect to MongoDB...');
+
 mongoose.connect(MONGO_URI)
-    .then(() => console.log('✅ MongoDB Connected'))
-    .catch(err => console.error('❌ MongoDB Connection Error:', err));
+    .then(() => {
+        console.log('✅ MongoDB Connected successfully');
+    })
+    .catch(err => {
+        console.error('❌ MongoDB Connection Error:', err.message);
+        console.log('⚠️ Server will continue to run, but DB-dependent features might fail.');
+    });
 
 // Load Admin Credentials from .json file
 const adminsPath = path.join(__dirname, '..', 'uwo', '.json');
