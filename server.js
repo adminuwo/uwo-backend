@@ -82,7 +82,7 @@ console.log(`🪣 Using GCS Bucket: ${bucketName}`);
 // Models
 const knowledgeText = knowledgeBase.map(item => `Q: ${item.question}\nA: ${item.answer}`).join('\n\n');
 const generativeModel = vertexAI.getGenerativeModel({
-    model: 'gemini-2.0-flash',
+    model: 'gemini-2.5-flash',
     systemInstruction: `You are UWO AI Assistant, a professional AI assistant for the UWO (Unified Web Options) digital platform.
 
 -------------------------------------
@@ -132,7 +132,9 @@ If local context from documents is provided, use it to answer. Always follow the
 -------------------------------------
 
 🎯 GOAL:
-Deliver a natural, human-like, multilingual conversation experience where the user feels the AI understands and speaks their language perfectly.`
+1. First, search and answer from the provided DOCUMENT CONTEXT (RAG).
+2. If the answer is NOT in the documents, use your general knowledge but answer BRILLIANTLY.
+3. Deliver a natural, human-like, multilingual conversation experience where the user feels the AI understands and speaks their language perfectly.`
 });
 
 console.log(`✅ Vertex AI initialized successfully`);
@@ -882,9 +884,11 @@ CONCLUSION:
 ### KNOWLEDGE CONTEXT:
 ${contextText}
 
-### RAG RULES:
-- Answer from context. If missing, use general knowledge.
-- NO APOLOGIES: Never say "not found". Just answer brilliantly.`;
+### RAG PRIORITY RULES:
+- STEP 1: Always analyze the "UPLOADED DOCUMENTS" context first.
+- STEP 2: If the query is related to UWO or documents, answer strictly from them.
+- STEP 3: If facts are not in documents, use your general knowledge to help the user.
+- NO APOLOGIES: Never say "not found in documents". Just answer naturally.`;
 
         const tempModel = vertexAI.getGenerativeModel({
             model: 'gemini-2.5-flash',
