@@ -39,7 +39,7 @@ app.use((req, res, next) => {
 
 // Health Check Route
 app.get('/', (req, res) => {
-    res.send('<h2>UWO™ Backend is Active & Running 🚀</h2><p>Server connected securely to MongoDB & Vertex AI.</p>');
+    res.send('<h2>UWO Backend is Active and Running</h2><p>Server connected securely to MongoDB & Vertex AI.</p>');
 });
 
 // MongoDB Connection
