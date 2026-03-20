@@ -847,9 +847,15 @@ app.post('/api/chat', async (req, res) => {
         const detectedLang = detectLanguage(message);
         console.log(`💬 User Message (${email || 'Anonymous'}): "${message}" | Detected: ${detectedLang}`);
 
-        // Step 2: Fetch RAG context (from DB + knowledge_base.js)
+        // Step 2: Fetch RAG context (from DB + knowledge_base.js) -- Truncated to avoid 128k Context Limit Error
         const allDocs = await Document.find();
-        const docsContext = allDocs.map(d => `--- FILE: ${d.fileName} ---\n${d.extractedText}`).join("\n\n");
+        let docsContext = allDocs.map(d => `--- FILE: ${d.fileName} ---\n${d.extractedText}`).join("\n\n");
+        
+        // Safety truncation: 60,000 chars is approx 50,000 tokens maximum with complex unicode (Safe for 131,072 limit)
+        if (docsContext.length > 60000) {
+            docsContext = docsContext.substring(0, 60000) + "\n\n...[ADDITIONAL CONTENT TRUNCATED TO FIT MEMORY LIMIT]...";
+        }
+
         const contextText = `### CORE KNOWLEDGE:\n${knowledgeText}\n\n### UPLOADED DOCUMENTS:\n${docsContext}`;
 
         // Step 3: Generate Dynamic System Prompt
