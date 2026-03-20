@@ -68,9 +68,9 @@ try {
 const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret_key';
 
 // --- Vertex AI Config ---
-const project = process.env.GOOGLE_PROJECT_ID || 'unified-web-options';
+const project = process.env.GOOGLE_PROJECT_ID 
 const location = process.env.GOOGLE_LOCATION || 'asia-south1';
-const bucketName = process.env.GCS_BUCKET_NAME || 'uwo-rag-docs';
+const bucketName = process.env.GCS_BUCKET_NAME 
 
 console.log(`✅ Google Cloud initializing with project: ${project}`);
 console.log(`📍 Location: ${location}`);
