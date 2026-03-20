@@ -37,6 +37,11 @@ app.use((req, res, next) => {
     next();
 });
 
+// Health Check Route
+app.get('/', (req, res) => {
+    res.send('<h2>UWO™ Backend is Active & Running 🚀</h2><p>Server connected securely to MongoDB & Vertex AI.</p>');
+});
+
 // MongoDB Connection
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/uwo_database';
 mongoose.connect(MONGO_URI)
