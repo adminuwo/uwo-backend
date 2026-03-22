@@ -37,11 +37,23 @@ app.use((req, res, next) => {
     next();
 });
 
-// MongoDB Connection
+// Health Check Route
+app.get('/', (req, res) => {
+    res.send('<h2>UWO Backend is Active and Running</h2><p>Server connected securely to MongoDB & Vertex AI.</p>');
+});
+
+// MongoDB Connection with enhanced error handling for Cloud Run
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/uwo_database';
+console.log('🚀 Attempting to connect to MongoDB...');
+
 mongoose.connect(MONGO_URI)
-    .then(() => console.log('✅ MongoDB Connected'))
-    .catch(err => console.error('❌ MongoDB Connection Error:', err));
+    .then(() => {
+        console.log('✅ MongoDB Connected successfully');
+    })
+    .catch(err => {
+        console.error('❌ MongoDB Connection Error:', err.message);
+        console.log('⚠️ Server will continue to run, but DB-dependent features might fail.');
+    });
 
 // Load Admin Credentials from .json file
 const adminsPath = path.join(__dirname, '..', 'uwo', '.json');
@@ -63,9 +75,9 @@ try {
 const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret_key';
 
 // --- Vertex AI Config ---
-const project = process.env.GOOGLE_PROJECT_ID || 'unified-web-options';
+const project = process.env.GOOGLE_PROJECT_ID 
 const location = process.env.GOOGLE_LOCATION || 'asia-south1';
-const bucketName = process.env.GCS_BUCKET_NAME || 'uwo-rag-docs';
+const bucketName = process.env.GCS_BUCKET_NAME 
 
 console.log(`✅ Google Cloud initializing with project: ${project}`);
 console.log(`📍 Location: ${location}`);
@@ -82,7 +94,7 @@ console.log(`🪣 Using GCS Bucket: ${bucketName}`);
 // Models
 const knowledgeText = knowledgeBase.map(item => `Q: ${item.question}\nA: ${item.answer}`).join('\n\n');
 const generativeModel = vertexAI.getGenerativeModel({
-    model: 'gemini-2.0-flash',
+    model: 'gemini-2.5-flash',
     systemInstruction: `You are UWO AI Assistant, a professional AI assistant for the UWO (Unified Web Options) digital platform.
 
 -------------------------------------
@@ -132,7 +144,9 @@ If local context from documents is provided, use it to answer. Always follow the
 -------------------------------------
 
 🎯 GOAL:
-Deliver a natural, human-like, multilingual conversation experience where the user feels the AI understands and speaks their language perfectly.`
+1. First, search and answer from the provided DOCUMENT CONTEXT (RAG).
+2. If the answer is NOT in the documents, use your general knowledge but answer BRILLIANTLY.
+3. Deliver a natural, human-like, multilingual conversation experience where the user feels the AI understands and speaks their language perfectly.`
 });
 
 console.log(`✅ Vertex AI initialized successfully`);
@@ -845,9 +859,15 @@ app.post('/api/chat', async (req, res) => {
         const detectedLang = detectLanguage(message);
         console.log(`💬 User Message (${email || 'Anonymous'}): "${message}" | Detected: ${detectedLang}`);
 
-        // Step 2: Fetch RAG context (from DB + knowledge_base.js)
+        // Step 2: Fetch RAG context (from DB + knowledge_base.js) -- Truncated to avoid 128k Context Limit Error
         const allDocs = await Document.find();
-        const docsContext = allDocs.map(d => `--- FILE: ${d.fileName} ---\n${d.extractedText}`).join("\n\n");
+        let docsContext = allDocs.map(d => `--- FILE: ${d.fileName} ---\n${d.extractedText}`).join("\n\n");
+        
+        // Safety truncation: 60,000 chars is approx 50,000 tokens maximum with complex unicode (Safe for 131,072 limit)
+        if (docsContext.length > 60000) {
+            docsContext = docsContext.substring(0, 60000) + "\n\n...[ADDITIONAL CONTENT TRUNCATED TO FIT MEMORY LIMIT]...";
+        }
+
         const contextText = `### CORE KNOWLEDGE:\n${knowledgeText}\n\n### UPLOADED DOCUMENTS:\n${docsContext}`;
 
         // Step 3: Generate Dynamic System Prompt
@@ -882,9 +902,11 @@ CONCLUSION:
 ### KNOWLEDGE CONTEXT:
 ${contextText}
 
-### RAG RULES:
-- Answer from context. If missing, use general knowledge.
-- NO APOLOGIES: Never say "not found". Just answer brilliantly.`;
+### RAG PRIORITY RULES:
+- STEP 1: Always analyze the "UPLOADED DOCUMENTS" context first.
+- STEP 2: If the query is related to UWO or documents, answer strictly from them.
+- STEP 3: If facts are not in documents, use your general knowledge to help the user.
+- NO APOLOGIES: Never say "not found in documents". Just answer naturally.`;
 
         const tempModel = vertexAI.getGenerativeModel({
             model: 'gemini-2.5-flash',
