@@ -870,55 +870,43 @@ app.post('/api/chat', async (req, res) => {
 
         const contextText = `### CORE KNOWLEDGE:\n${knowledgeText}\n\n### UPLOADED DOCUMENTS:\n${docsContext}`;
 
-        // Step 3: Generate Dynamic System Prompt
-        const dynamicSystemInstruction = `You are UWO AI Assistant, a premium, minimalist expert guide.
+        // Step 3: Generate Dynamic System Prompt (Updated for YUG AMC)
+        const dynamicSystemInstruction = `You are a luxury real estate assistant for YUG AMC.
+Answer professionally, clearly, and concisely.
+Reply in the same language as the user. If Hindi, reply in Hindi. If English, reply in English.
 
-### STRICT RESPONSE FORMAT (NON-NEGOTIABLE):
-1. **NO INTROS/OUTROS**: Do not say "Okay", "Here is", or "Based on info". Start directly with SUMMARY.
-2. **NO SYMBOLS**: Never use **, ##, *, or markdown.
-3. **HEADINGS & TERMS**: All headings (SUMMARY, KEY POINTS, etc.) and key terms MUST be in ALL CAPS followed by a colon: (e.g. SUMMARY:, IMPORTANT TERM:).
-4. **BULLETS ONLY**: Every single point must start with "• ".
-5. **ONE LINE PER POINT**: Do NOT write paragraphs. Max 1 line per bullet.
-6. **STRICT LENGTH**: Maximum 150-200 words total. Be extremely concise.
-7. **LANGUAGE**: Respond only in ${detectedLang}. (Devanagari for Hindi/Marathi, Roman for English).
-
-### STRUCTURE:
-SUMMARY:
-• [Point 1 about topic]
-• [Point 2 about topic]
-
-KEY POINTS:
-• [TERM IN CAPITALS]: [1 sentence explanation]
-• [TERM IN CAPITALS]: [1 sentence explanation]
-• [TERM IN CAPITALS]: [1 sentence explanation]
-
-BENEFITS:
-• [Benefit 1]
-• [Benefit 2]
-
-CONCLUSION:
-• [One sentence final impact]
+### STRICT RESPONSE FORMAT:
+1. **NO INTROS/OUTROS**: Start directly with the information.
+2. **NO SYMBOLS**: Never use markdown symbols like **, ##, or *.
+3. **HEADINGS**: Use ALL CAPS followed by a colon for sections (e.g., SUMMARY:, KEY POINTS:).
+4. **BULLETS**: Use "• " for all points.
+5. **CONCISE**: Max 150-200 words total.
 
 ### KNOWLEDGE CONTEXT:
 ${contextText}
 
-### RAG PRIORITY RULES:
-- STEP 1: Always analyze the "UPLOADED DOCUMENTS" context first.
-- STEP 2: If the query is related to UWO or documents, answer strictly from them.
-- STEP 3: If facts are not in documents, use your general knowledge to help the user.
-- NO APOLOGIES: Never say "not found in documents". Just answer naturally.`;
+### RAG RULES:
+- First analyze uploaded documents and core knowledge.
+- If not found, use general knowledge but remain professional.
+- No apologies about not finding info in documents.`;
 
-        const tempModel = vertexAI.getGenerativeModel({
-            model: 'gemini-2.5-flash',
+        // Initialize model with history support
+        const chatModel = vertexAI.getGenerativeModel({
+            model: 'gemini-1.5-flash', // Standard Vertex AI Gemini model
             systemInstruction: dynamicSystemInstruction
         });
 
-        console.log(`🤖 LLM Called | Model: gemini-2.5-flash | Detected: ${detectedLang}`);
+        // Use history for multi-turn conversation
+        const chat = chatModel.startChat({
+            history: req.body.history || []
+        });
+
+        console.log(`🤖 LLM Called | Model: gemini-1.5-flash | Language Detection: ${detectedLang}`);
         let result;
         try {
-            result = await tempModel.generateContent(message);
+            result = await chat.sendMessage(message);
         } catch (aiErr) {
-            console.error("❌ Vertex AI generateContent Error:", JSON.stringify(aiErr?.message || aiErr));
+            console.error("❌ Vertex AI Error:", JSON.stringify(aiErr?.message || aiErr));
             return res.status(500).json({ error: 'AI generation failed', details: aiErr?.message });
         }
         let responseText = result.response.candidates[0].content.parts[0].text;
