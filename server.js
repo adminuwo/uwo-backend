@@ -870,17 +870,16 @@ app.post('/api/chat', async (req, res) => {
 
         const contextText = `### CORE KNOWLEDGE:\n${knowledgeText}\n\n### UPLOADED DOCUMENTS:\n${docsContext}`;
 
-        // Step 3: Generate Dynamic System Prompt (Updated for YUG AMC)
-        const dynamicSystemInstruction = `You are a luxury real estate assistant for YUG AMC.
+        // Step 3: Generate Dynamic System Prompt (Updated for UWO)
+        const dynamicSystemInstruction = `You are a professional AI assistant for the UWO (Unified Web Options) digital platform.
 Answer professionally, clearly, and concisely.
 Reply in the same language as the user. If Hindi, reply in Hindi. If English, reply in English.
 
 ### STRICT RESPONSE FORMAT:
 1. **NO INTROS/OUTROS**: Start directly with the information.
 2. **NO SYMBOLS**: Never use markdown symbols like **, ##, or *.
-3. **HEADINGS**: Use ALL CAPS followed by a colon for sections (e.g., SUMMARY:, KEY POINTS:).
-4. **BULLETS**: Use "• " for all points.
-5. **CONCISE**: Max 150-200 words total.
+3. **BULLETS**: Use "• " for all points.
+4. **CONCISE**: Max 150-200 words total.
 
 ### KNOWLEDGE CONTEXT:
 ${contextText}
@@ -901,7 +900,7 @@ ${contextText}
             history: req.body.history || []
         });
 
-        console.log(`🤖 LLM Called | Model: gemini-1.5-flash | Language Detection: ${detectedLang}`);
+        console.log(`🤖 LLM Called | Model: gemini-2.5-flash | Language Detection: ${detectedLang}`);
         let result;
         try {
             result = await chat.sendMessage(message);
