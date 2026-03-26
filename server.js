@@ -913,11 +913,10 @@ ${contextText}
         console.log(`✨ AI Response received [Length: ${responseText.length}]`);
 
         // Step 5: Hard Language Enforcement (Fallback)
-        // Basic check: if we asked for Hindi/Marathi (Devanagari) but got ASCII, it's wrong.
         const isActuallyDevanagari = /[\u0900-\u097F]/.test(responseText);
         if ((detectedLang === "Hindi" || detectedLang === "Marathi") && !isActuallyDevanagari && !message.toLowerCase().includes("english")) {
             console.log("⚠️ Incorrect language detected in AI response. Enforcing rewrite...");
-            const rewriteResult = await tempModel.generateContent(`Your previous response was not in ${detectedLang}. Rewrite the following response strictly in ${detectedLang} script only: \n\n${responseText}`);
+            const rewriteResult = await chatModel.generateContent(`Your previous response was not in ${detectedLang}. Rewrite the following response strictly in ${detectedLang} script only: \n\n${responseText}`);
             responseText = rewriteResult.response.candidates[0].content.parts[0].text;
         }
 
