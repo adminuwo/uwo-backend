@@ -66,18 +66,18 @@ try {
 } catch (err) {
     console.warn('⚠️ Could not load admin .json, using fallback credentials');
     // Updated fallback to match user's expected email: admin@uwo.com
-    admins = [{ 
-        email: process.env.ADMIN_EMAIL || "admin@uwo.com", 
-        password: process.env.ADMIN_PASSWORD || "uwo@1234" 
+    admins = [{
+        email: process.env.ADMIN_EMAIL || "admin@uwo.com",
+        password: process.env.ADMIN_PASSWORD || "uwo@1234"
     }];
 }
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret_key';
 
 // --- Vertex AI Config ---
-const project = process.env.GOOGLE_PROJECT_ID 
+const project = process.env.GOOGLE_PROJECT_ID
 const location = process.env.GOOGLE_LOCATION || 'asia-south1';
-const bucketName = process.env.GCS_BUCKET_NAME 
+const bucketName = process.env.GCS_BUCKET_NAME
 
 console.log(`✅ Google Cloud initializing with project: ${project}`);
 console.log(`📍 Location: ${location}`);
@@ -161,7 +161,7 @@ console.log(`[INFO] [Cloudinary Config] API Secret: ${process.env.CLOUDINARY_API
 // --- Language Detection Helper ---
 const detectLanguage = (text) => {
     const lower = text.toLowerCase().trim();
-    
+
     // 1. Manual Language Overrides (Highest Priority)
     if (lower.includes("marathi") || /[\u0900-\u097F]/.test(text) && (lower.includes("येथे") || lower.includes("कसे"))) return "Marathi";
     if (lower.includes("hindi")) return "Hindi";
@@ -275,7 +275,7 @@ app.post('/api/admin/upload-doc', upload.single('document'), async (req, res) =>
         // 2. Upload to GCS Bucket for permanent storage
         console.log(`☁️ Uploading ${req.file.originalname} to GCS...`);
         const gcsFile = bucket.file(fileName);
-        
+
         await bucket.upload(filePath, {
             destination: fileName,
             metadata: { contentType: req.file.mimetype }
@@ -421,7 +421,7 @@ app.delete('/api/contacts/:id', auth, async (req, res) => {
 app.post('/api/aisa-demo', async (req, res) => {
     try {
         const { name, email, phone, company, message } = req.body;
-        
+
         // Save to Database
         const newLead = new Contact({
             name,
@@ -862,7 +862,7 @@ app.post('/api/chat', async (req, res) => {
         // Step 2: Fetch RAG context (from DB + knowledge_base.js) -- Truncated to avoid 128k Context Limit Error
         const allDocs = await Document.find();
         let docsContext = allDocs.map(d => `--- FILE: ${d.fileName} ---\n${d.extractedText}`).join("\n\n");
-        
+
         // Safety truncation: 60,000 chars is approx 50,000 tokens maximum with complex unicode (Safe for 131,072 limit)
         if (docsContext.length > 60000) {
             docsContext = docsContext.substring(0, 60000) + "\n\n...[ADDITIONAL CONTENT TRUNCATED TO FIT MEMORY LIMIT]...";
@@ -892,7 +892,7 @@ ${contextText}
 
         // Initialize model with history support
         const chatModel = vertexAI.getGenerativeModel({
-            model: 'gemini-1.5-flash', // Standard Vertex AI Gemini model
+            model: 'gemini-2.5-flash', // Standard Vertex AI Gemini model
             systemInstruction: dynamicSystemInstruction
         });
 
